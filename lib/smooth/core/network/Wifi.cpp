@@ -22,6 +22,8 @@ limitations under the License.
 #include "smooth/core/ipc/Publisher.h"
 #include "smooth/core/util/copy_min_to_buffer.h"
 #include "smooth/core/logging/log.h"
+#include <esp_event.h>
+#include <esp_smartconfig.h>
 
 #ifdef ESP_PLATFORM
 #include "sdkconfig.h"
@@ -39,6 +41,7 @@ namespace smooth::core::network
     Wifi::Wifi()
     {
         esp_netif_init();
+
         esp_event_handler_instance_register(WIFI_EVENT,
                                            ESP_EVENT_ANY_ID,
                                            &Wifi::wifi_event_callback,
@@ -46,16 +49,23 @@ namespace smooth::core::network
                                            &instance_wifi_event);
 
         esp_event_handler_instance_register(IP_EVENT,
-                                           ESP_EVENT_ANY_ID,
+                                           IP_EVENT_STA_GOT_IP,
                                            &Wifi::wifi_event_callback,
                                            this,
                                            &instance_ip_event);
+
+        esp_event_handler_instance_register(SC_EVENT,
+                                           ESP_EVENT_ANY_ID,
+                                           &Wifi::wifi_event_callback,
+                                           this,
+                                           &instance_wifi_event);
     }
 
     Wifi::~Wifi()
     {
-        esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, instance_ip_event);
+        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_ip_event);
         esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_wifi_event);
+        esp_event_handler_instance_unregister(SC_EVENT, ESP_EVENT_ANY_ID, instance_wifi_event);
         esp_wifi_disconnect();
         esp_wifi_stop();
         esp_wifi_deinit();
@@ -92,8 +102,8 @@ namespace smooth::core::network
 
         config.sta.bssid_set = false;
 
-        // Store Wifi settings in RAM - it is the applications responsibility to store settings.
-        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        // Store Wifi settings in flash - it is the applications responsibility to store settings.
+        esp_wifi_set_storage(WIFI_STORAGE_RAM); // WIFI_STORAGE_RAM
         esp_wifi_set_config(WIFI_IF_STA, &config);
 
         close_if();
@@ -132,7 +142,9 @@ namespace smooth::core::network
         {
             if (event_id == WIFI_EVENT_STA_START)
             {
-                esp_netif_set_hostname(wifi->interface, wifi->host_name.c_str());
+                if (!wifi->is_smartconfig && wifi->interface) {
+                    esp_netif_set_hostname(wifi->interface, wifi->host_name.c_str());
+                }
             }
             else if (event_id == WIFI_EVENT_STA_CONNECTED)
             {
@@ -211,6 +223,83 @@ namespace smooth::core::network
                 publish_status(false, true);
             }
         }
+        else if (event_base == SC_EVENT) 
+        {
+            if (event_id == SC_EVENT_SCAN_DONE)
+            {
+                Log::info("Application", "Scan done");
+            }
+            else if (event_id == SC_EVENT_FOUND_CHANNEL)
+            {
+                Log::info("Application", "Found channel");
+            }
+            else if (event_id == SC_EVENT_GOT_SSID_PSWD)
+            {
+                Log::info("Application", "Got SSID and password");
+                smartconfig_event_got_ssid_pswd_t *evt = 
+                    reinterpret_cast<smartconfig_event_got_ssid_pswd_t *>(event_data);
+                
+                Log::info("Application", "ssid: {}", evt->ssid);
+                Log::info("Application", "password: {}", evt->password);
+                
+                wifi_config_t config;
+                memset(&config, 0, sizeof(config));
+
+                memcpy(config.sta.ssid, evt->ssid, sizeof(config.sta.ssid));
+                memcpy(config.sta.password, evt->password, sizeof(config.sta.password));
+
+                config.sta.bssid_set = evt->bssid_set;
+                if (config.sta.bssid_set == true) {
+                    memcpy(config.sta.bssid, evt->bssid, sizeof(config.sta.bssid));
+                }
+
+                // Store Wifi settings in RAM - it is the applications responsibility to store settings.
+                esp_wifi_set_storage(WIFI_STORAGE_RAM);
+                ESP_ERROR_CHECK( esp_wifi_disconnect() );
+                esp_wifi_set_config(WIFI_IF_STA, &config);
+                esp_wifi_connect();
+                wifi->is_smartconfig = false;
+            }
+            else if (event_id == SC_EVENT_SEND_ACK_DONE)
+            {
+                Log::info("Application", "send ack done");
+                esp_smartconfig_stop();
+            }
+        }
+    }
+
+    void Wifi::start_smartconfig()
+    {
+#ifdef ESP_PLATFORM
+        is_smartconfig = true;
+        esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+        assert(sta_netif);
+        wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+        esp_wifi_init(&init);
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_start();
+
+        ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
+        smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK( esp_smartconfig_start(&cfg) );
+#endif
+    }
+
+    std::tuple<bool, std::string, std::string> Wifi::get_config()
+    {
+        /* Get Wi-Fi Station configuration */
+        wifi_config_t wifi_cfg;
+
+        if (esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg) != ESP_OK) {
+            Log::error("Wifi", "wifi get config failed ssid: {} password: {}", 
+                wifi_cfg.sta.ssid, wifi_cfg.sta.password);
+            return std::make_tuple( false, "", "");
+        }
+
+        std::string wifi_ssid = reinterpret_cast<char*>(wifi_cfg.sta.ssid);
+        std::string wifi_password = reinterpret_cast<char*>(wifi_cfg.sta.password);
+
+        return std::make_tuple(true, std::move(wifi_ssid),std::move(wifi_password));
     }
 
     void Wifi::close_if()
