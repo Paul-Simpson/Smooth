@@ -15,10 +15,10 @@ limitations under the License.
 
 #include "smooth/core/Application.h"
 #include "smooth/core/task_priorities.h"
-#include "smooth/application/display/LCDSpi.h"
-#include "smooth/application/io/spi/BME280SPI.h"
+#include "smooth/core/io/i2c/Master.h"
+#include "smooth/application/io/i2c/SHT30.h"
 
-namespace spi_4_line_devices_test
+namespace i2c_sht30_test
 {
     class App : public smooth::core::Application
     {
@@ -29,23 +29,13 @@ namespace spi_4_line_devices_test
 
             void tick() override;
 
-            void print_display_parameters(const uint8_t cmd, uint8_t param_count);
-
-            void print_thp_sensor_measurements();
-
-            void print_thp_sensor_configuration();
-
-            void print_thp_sensor_id();
+            void print_sensor_measurements();
 
         private:
-            bool init_ILI9341();
+            bool init_i2c_sht30();
 
-            bool init_BME280SPI();
-
-            spi_host_device_t spi_host;
-            std::unique_ptr<smooth::application::display::LCDSpi> display{};
-            std::unique_ptr<smooth::application::sensor::BME280SPI> thp_sensor{};
-            bool ili9341_initialized{ false };
-            bool bme280_initialized{ false };
+            smooth::core::io::i2c::Master i2c_master;
+            std::unique_ptr<smooth::application::sensor::SHT30> sensor{};
+            bool sht30_initialized{ false };
     };
 }
