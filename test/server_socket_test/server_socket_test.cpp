@@ -47,8 +47,19 @@ namespace server_socket_test
         network::Wifi& wifi = get_wifi();
         wifi.set_host_name("Smooth-ESP");
         wifi.set_auto_connect(true);
-        wifi.set_ap_credentials(WIFI_SSID, WIFI_PASSWORD);
-        wifi.connect_to_ap();
+        // wifi.set_ap_credentials(WIFI_SSID, WIFI_PASSWORD);
+        // wifi.connect_to_ap();
+        auto [ isExisting, ssid, password ] = wifi.get_config();
+
+        if ( isExisting )
+        {
+            Log::info("App", "ssid: {}", ssid);
+            Log::info("App", "password: {}", password);
+            wifi.set_ap_credentials(ssid, password);
+            wifi.connect_to_ap();
+        }
+        else 
+            wifi.start_smartconfig();
 
         // The server creates StreamingClients which are self-sufficient and never seen by the main
         // application (unless the implementor adds such bindings).
